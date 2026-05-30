@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Grist Gantt Chart</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<link  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.css">
+<script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.umd.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #fff;
+  color: #1a1a2e;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Toolbar ─────────────────────────────────────── */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: #f4f6fb;
+  border-bottom: 1px solid #dce6f7;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.t-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7a99;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-right: 2px;
+}
+
+.v-btn {
+  padding: 3px 11px;
+  border: 1px solid #c8d2e8;
+  background: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #333;
+  transition: background .15s, color .15s;
+  line-height: 1.6;
+}
+.v-btn:hover:not(.active) { background: #edf1fa; }
+.v-btn.active {
+  background: #1a2744;
+  color: #fff;
+  border-color: #1a2744;
+}
+
+.t-sep { width: 1px; height: 18px; background: #d0d8ec; margin: 0 4px; }
+
+#item-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: #8899bb;
+  font-style: italic;
+}
+
+/* ── Legend ──────────────────────────────────────── */
+#legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 14px;
+  background: #fff;
+  border-bottom: 1px solid #eef1f8;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #555;
+}
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* ── Main chart area ─────────────────────────────── */
+#chart-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px 16px;
+}
+
+/* ── Empty / loading states ──────────────────────── */
+#loading, #empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #9aabb8;
+  text-align: center;
+  padding: 40px 24px;
+}
+#loading { display: flex; }
+#empty   { display: none; }
+
+.state-icon { font-size: 40px; margin-bottom: 12px; }
+.state-title { font-size: 15px; font-weight: 600; color: #6b7a99; margin-bottom: 8px; }
+.state-body  { font-size: 12px; line-height: 1.7; color: #9aabb8; }
+.state-body strong { color: #6b7a99; }
+
+/* ── frappe-gantt overrides ──────────────────────── */
+.gantt .grid-header {
+  fill: #f4f6fb !important;
+  stroke: #dce6f7 !important;
+}
+.gantt .grid-row:nth-child(even) { fill: #fafbfe !important; }
+.gantt .tick             { stroke: #e0e6f4 !important; }
+.gantt .today-highlight  { fill: rgba(220,163,63,.12) !important; }
+.gantt .upper-text,
+.gantt .lower-text       { fill: #5a6a8a !important; font-size: 11px !important; }
+.gantt .bar-label        { fill: #fff !important; font-size: 11px !important; font-weight: 500 !important; }
+.gantt .bar-label.big    { fill: #333 !important; }
+.gantt .bar-wrapper .bar { rx: 4; ry: 4; }
+.gantt-container         { font-family: inherit !important; }
+
+/* popup */
+.gantt-container .popup-wrapper .pointer { display: none; }
+</style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div id="toolbar">
+  <span class="t-label">View:</span>
+  <button class="v-btn" data-mode="Day"     onclick="setMode('Day')">Day</button>
+  <button class="v-btn active" data-mode="Week"  onclick="setMode('Week')">Week</button>
+  <button class="v-btn" data-mode="Month"   onclick="setMode('Month')">Month</button>
+  <button class="v-btn" data-mode="Year"    onclick="setMode('Year')">Year</button>
+  <div class="t-sep"></div>
+  <button class="v-btn" onclick="jumpToday()">Today</button>
+  <button class="v-btn" onclick="expandAll()">Fit all</button>
+  <span id="item-count"></span>
+</div>
+
+<!-- Legend (populated dynamically) -->
+<div id="legend"></div>
+
+<!-- States -->
+<div id="loading"><div class="state-icon">⏳</div><div class="state-title">Loading data…</div></div>
+<div id="empty">
+  <div class="state-icon">📊</div>
+  <div class="state-title">No data to display</div>
+  <div class="state-body">
+    Map columns in the Creator Panel on the right.<br><br>
+    <strong>Required:</strong> Task Name · Start Date · End Date<br>
+    <strong>Optional:</strong> Progress (%) · Group/Stage · Color (hex)
+  </div>
+</div>
+
+<!-- Chart -->
+<div id="chart-wrap"><svg id="gantt"></svg></div>
+
+<script>
+// ── Constants ────────────────────────────────────────────────
+const STAGE_PALETTE = {
+  'investigation': '#7B68EE',
+  'pretrial':      '#FFA040',
+  'filed case':    '#2E7DD4',
+  'filed':         '#2E7DD4',
+  'trial':         '#DC143C',
+  'closed':        '#888888',
+  'complete':      '#28a745',
+  'completed':     '#28a745',
+  'incomplete':    '#E0A800',
+  'needs attention!': '#dc3545',
+  'urgent':        '#dc3545',
+  'waiting':       '#17a2b8',
+  'requested':     '#9b59b6',
+  'ready':         '#1abc9c',
+  'cancelled':     '#aaaaaa',
+};
+
+const DEFAULT_COLOR = '#2E7DD4';
+let ganttObj    = null;
+let currentMode = 'Week';
+let lastTasks   = [];
+
+// ── Helpers ──────────────────────────────────────────────────
+function toDateStr(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') {
+    const d = new Date(v * 1000);
+    return d.toISOString().split('T')[0];
+  }
+  if (typeof v === 'string') {
+    const d = new Date(v);
+    if (!isNaN(d)) return d.toISOString().split('T')[0];
+  }
+  return null;
+}
+
+function colorFor(group, rawColor) {
+  if (rawColor && typeof rawColor === 'string' && rawColor.match(/^#[0-9a-fA-F]{3,6}$/)) return rawColor;
+  if (group) return STAGE_PALETTE[group.toLowerCase().trim()] || DEFAULT_COLOR;
+  return DEFAULT_COLOR;
+}
+
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+function show(id)  { document.getElementById(id).style.display = 'flex'; }
+function hide(id)  { document.getElementById(id).style.display = 'none'; }
+
+// ── Record → task conversion ─────────────────────────────────
+function buildTasks(records) {
+  const tasks = [];
+  for (const r of records) {
+    const label = String(r.label || r.Task_Name || r.Case_Name || r.Name || r.name || 'Untitled');
+    const start = toDateStr(r.start_date);
+    let   end   = toDateStr(r.end_date);
+    if (!start) continue;
+    // Ensure end ≥ start (single-day bars allowed)
+    if (!end || end < start) end = start;
+
+    const progress = clamp(Number(r.progress || 0), 0, 100);
+    const group    = String(r.group || r.Stage || r.Status || '');
+    const color    = colorFor(group, r.color);
+
+    tasks.push({
+      id:           String(r.id != null ? r.id : tasks.length + 1),
+      name:         label,
+      start:        start,
+      end:          end,
+      progress:     progress,
+      custom_class: 'task-bar',
+      _color:       color,
+      _group:       group,
+      _rowId:       r.id,
+    });
+  }
+  return tasks;
+}
+
+// ── Apply custom colors to rendered SVG bars ─────────────────
+function applyColors(tasks) {
+  requestAnimationFrame(() => {
+    tasks.forEach(task => {
+      // frappe-gantt sets data-id on each .bar-wrapper
+      const wrapper = document.querySelector(`.bar-wrapper[data-id="${CSS.escape(task.id)}"]`);
+      if (!wrapper) return;
+      const bar = wrapper.querySelector('.bar');
+      const prog = wrapper.querySelector('.bar-progress');
+      if (bar)  bar.setAttribute('fill', task._color);
+      if (prog) prog.setAttribute('fill', lighten(task._color, -20));
+    });
+  });
+}
+
+function lighten(hex, amt) {
+  // Simple brightness shift on hex color
+  let c = hex.replace('#','');
+  if (c.length === 3) c = c.split('').map(x=>x+x).join('');
+  const num = parseInt(c, 16);
+  const r = clamp((num >> 16) + amt, 0, 255);
+  const g = clamp((num >> 8 & 0xFF) + amt, 0, 255);
+  const b = clamp((num & 0xFF) + amt, 0, 255);
+  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+}
+
+// ── Legend ────────────────────────────────────────────────────
+function buildLegend(tasks) {
+  const seen = new Map();
+  tasks.forEach(t => {
+    if (t._group && !seen.has(t._group)) seen.set(t._group, t._color);
+  });
+  const el = document.getElementById('legend');
+  if (seen.size === 0) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = '<span class="t-label" style="margin-right:4px">Legend:</span>';
+  seen.forEach((color, group) => {
+    el.innerHTML += `
+      <div class="legend-item">
+        <div class="legend-dot" style="background:${color}"></div>
+        <span>${group}</span>
+      </div>`;
+  });
+}
+
+// ── Render ────────────────────────────────────────────────────
+function renderGantt(tasks) {
+  hide('loading');
+
+  if (!tasks.length) {
+    hide('chart-wrap');
+    show('empty');
+    document.getElementById('legend').style.display = 'none';
+    document.getElementById('item-count').textContent = '';
+    return;
+  }
+
+  hide('empty');
+  show('chart-wrap');
+  document.getElementById('item-count').textContent =
+    tasks.length + ' item' + (tasks.length !== 1 ? 's' : '');
+
+  lastTasks = tasks;
+  buildLegend(tasks);
+
+  try {
+    ganttObj = new Gantt('#gantt', tasks, {
+      view_mode:   currentMode,
+      date_format: 'YYYY-MM-DD',
+      bar_height:  22,
+      padding:     16,
+      language:    'en',
+
+      on_click: task => {
+        if (task._rowId != null) grist.setCursorPos({ rowId: task._rowId });
+      },
+
+      custom_popup_html: task => {
+        const fmt = s => new Date(s).toLocaleDateString('en-US',
+          { month: 'short', day: 'numeric', year: 'numeric' });
+        const s = task._start ? fmt(task._start) : task.start;
+        const e = task._end   ? fmt(task._end)   : task.end;
+        const g = task._group ? `<div style="margin-top:4px;font-size:10px;color:#888">${task._group}</div>` : '';
+        return `
+          <div style="padding:10px 14px;font-family:inherit;min-width:190px;max-width:260px">
+            <div style="font-weight:600;font-size:13px;margin-bottom:6px;color:#1a2744">${task.name}</div>
+            <div style="font-size:11px;color:#555;margin-bottom:2px">Start: ${s}</div>
+            <div style="font-size:11px;color:#555;margin-bottom:2px">End:&nbsp;&nbsp; ${e}</div>
+            <div style="font-size:11px;color:#555">Progress: ${task.progress}%</div>
+            ${g}
+          </div>`;
+      },
+    });
+
+    applyColors(tasks);
+
+  } catch(err) {
+    show('chart-wrap');
+    document.getElementById('chart-wrap').innerHTML =
+      `<div style="padding:24px;color:#dc3545;font-size:13px">
+        <strong>Rendering error:</strong> ${err.message}</div>`;
+  }
+}
+
+// ── Toolbar actions ───────────────────────────────────────────
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.v-btn[data-mode]').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode));
+  if (ganttObj) {
+    ganttObj.change_view_mode(mode);
+    applyColors(lastTasks);
+  }
+}
+
+function jumpToday() {
+  if (ganttObj) {
+    // frappe-gantt v0.6 scroll_today
+    if (typeof ganttObj.scroll_today === 'function') ganttObj.scroll_today();
+  }
+}
+
+function expandAll() {
+  if (!lastTasks.length) return;
+  // Find earliest start and latest end; switch to a view that shows all
+  const starts = lastTasks.map(t => new Date(t.start));
+  const ends   = lastTasks.map(t => new Date(t.end));
+  const span = (Math.max(...ends) - Math.min(...starts)) / 86400000; // days
+  if      (span <= 30)  setMode('Week');
+  else if (span <= 180) setMode('Month');
+  else                  setMode('Year');
+}
+
+// ── Grist integration ─────────────────────────────────────────
+grist.ready({
+  columns: [
+    { name: 'label',      title: 'Task / Case Name',  type: 'Text',    optional: false },
+    { name: 'start_date', title: 'Start Date',         type: 'Date',    optional: false },
+    { name: 'end_date',   title: 'End Date',           type: 'Date',    optional: false },
+    { name: 'progress',   title: 'Progress (0–100)',   type: 'Numeric', optional: true  },
+    { name: 'group',      title: 'Group / Stage',      type: 'Any',     optional: true  },
+    { name: 'color',      title: 'Bar Color (hex)',    type: 'Text',    optional: true  },
+  ],
+  requiredAccess: 'read table',
+});
+
+grist.onRecords(function(records, mappings) {
+  try {
+    const mapped = grist.mapColumnNames(records, mappings) || records;
+    const tasks  = buildTasks(mapped);
+    renderGantt(tasks);
+  } catch(err) {
+    hide('loading');
+    document.getElementById('chart-wrap').innerHTML =
+      `<div style="padding:24px;color:#dc3545;font-size:13px">
+        Error processing data: ${err.message}</div>`;
+    show('chart-wrap');
+    hide('empty');
+  }
+});
+</script>
+</body>
+</html>
